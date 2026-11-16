@@ -1,0 +1,7 @@
+../Core/Src/acquisition/input_analog.c:23:20:new_sample	1
+../Core/Src/acquisition/input_analog.c:29:6:HAL_ADC_ConvHalfCpltCallback	2
+../Core/Src/acquisition/input_analog.c:34:6:HAL_ADC_ConvCpltCallback	2
+../Core/Src/acquisition/input_analog.c:39:6:input_analog_init	1
+../Core/Src/acquisition/input_analog.c:57:16:raw_to_mV	1
+../Core/Src/acquisition/input_analog.c:62:9:input_analog_get_mA	1
+../Core/Src/acquisition/input_analog.c:68:5:input_analog_cmd	3

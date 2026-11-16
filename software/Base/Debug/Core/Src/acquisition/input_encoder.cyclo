@@ -1,0 +1,5 @@
+../Core/Src/acquisition/input_encoder.c:21:6:input_encoder_init	2
+../Core/Src/acquisition/input_encoder.c:33:6:input_encoder_update	1
+../Core/Src/acquisition/input_encoder.c:46:9:input_encoder_get_rpm	1
+../Core/Src/acquisition/input_encoder.c:51:7:input_encoder_get_rad_s	1
+../Core/Src/acquisition/input_encoder.c:57:5:input_encoder_cmd	3
