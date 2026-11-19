@@ -91,3 +91,114 @@ void motor_set_ccr(uint32_t ccr) {
 | `SETCCR XXXX` | CCR immédiat |
 | `led on/off/toggle` | LED utilisateur PA5 |
 | `help` | Liste toutes les commandes |
+
+---
+
+### Mesure de courant
+
+D'après le schéma KiCad, deux courants sont disponibles sur la carte :
+`U_Imes`:  PA1, ADC1, IN2, Courant de phase U
+`Bus_Imes`: PC2, ADC1, IN8, Courant de bus DC 
+
+Le courant de bras est mesuré via **ADC1** (12 bits, canal IN2 — broche PA1 `U_Imes`) synchronisé avec le PWM et filtré numériquement. 
+
+#### Fonction de transfert du capteur
+
+Le capteur de courant utilisé est le **HCPL-7800A**. Il mesure la tension aux bornes d'un shunt résistif et délivre une tension analogique isolée proportionnelle au courant.
+
+D'après la datasheet HCPL-7800A :
+- Gain interne : **8,2 V/V**
+- Plage de sortie centrée sur $V_{cc}/2$
+- Largeur de bande : ~100 kHz
+
+La chaîne de mesure complète a pour fonction de transfert statique :
+
+$$H_{capteur}(s) \approx K_{capteur} = \frac{V_{out}}{I_{mesure}} = \mathbf{100\,\text{mV/A}}$$
+
+avec un offset de **1650 mV** correspondant à $V_{cc}/2 = 3300/2$ mV à courant nul.
+
+La conversion courant ↔ tension est :
+
+$$V_{out}(mV) = 1650 + 100 \times I(A)$$
+$$I(mA) = \frac{V_{out}(mV) - 1650}{100} \times 1000$$
+
+
+#### Première mesure en polling
+
+Avant la mise en place de la chaîne DMA, la mesure a été validée en mode **polling** : conversion ADC déclenchée manuellement via `HAL_ADC_Start()` / `HAL_ADC_PollForConversion()`.
+
+#### Chaîne d'acquisition Timer/ADC/DMA
+
+Une fois validée, la mesure est rendue périodique et synchrone aux PWM via la chaîne :
+
+TIM1 (TRGO update, 20 kHz)
+  → déclenche ADC1 (ExternalTrigConv = ADC_EXTERNALTRIG_T1_TRGO)
+  → DMA circulaire → buffer adc_buf[2]
+  → callback HAL_ADC_ConvHalfCpltCallback / ConvCpltCallback
+  → filtre IIR ×16
+
+**Filtre IIR (moyennage ×16) :**
+
+```c
+static inline void new_sample(uint16_t raw) {
+    filt16 += raw - (filt16 >> 4);  // filt = 15/16 * filt + 1/16 * raw
+}
+```
+
+**Conversion en mA :**
+
+$$I_{mA} = \frac{(V_{mV} - V_{offset}) \times 1000}{S_{mV/A}} \quad S = 100\,\text{mV/A},\quad V_{offset} = 1650\,\text{mV}$$
+
+```c
+#define SENSOR_SENS_MV_A  100     // 100 mV/A
+#define ADC_VREF_MV       3300
+#define ADC_FULL_SCALE    4095
+
+int32_t input_analog_get_mA(void) {
+    int32_t v_mV = (int32_t)((raw * ADC_VREF_MV) / ADC_FULL_SCALE);
+    return ((v_mV - offset_mV) * 1000) / SENSOR_SENS_MV_A;
+}
+```
+
+**Commandes shell :**
+
+| Commande | Description |
+|---|---|
+| `current` | `raw` · `V (mV)` · `I (mA)` · `offset (mV)` · `n échantillons` |
+| `current zero` | Recale l'offset sur la valeur courante |
+
+![Test mesure de courant](docs/shell_current_test.png)
+
+---
+
+### Mesure de vitesse (Implémenté, non testé)
+
+La vitesse est mesurée via l'encodeur incrémental couplé au moteur sur **TIM3** (mode Hall Sensor, 3 canaux : PA4, PA6, PC8). La résolution est de 1024 impulsions/tour en mode quadrature × 4.
+
+#### Fonction de transfert du capteur de vitesse
+
+$$\omega(rad/s) = \frac{\Delta_{cnt} \times 2\pi}{N_{cpp} \times T_s}$$
+
+La fonction de transfert discrète du capteur est un **différenciateur du premier ordre** avec retard :
+
+$$H_{enc}(z) = \frac{2\pi}{N_{cpp} \cdot T_s} \cdot \frac{z - 1}{z}$$
+
+soit en continu (approximation à basse fréquence, $T_s = 10\,\text{ms}$) :
+
+$$H_{enc}(s) \approx \frac{2\pi}{N_{cpp} \cdot T_s} \cdot \frac{s \cdot T_s}{1 + s \cdot T_s} \approx \frac{2\pi}{N_{cpp}} \cdot s \quad \text{pour } f \ll \frac{1}{T_s}$$
+
+#### Constante de temps mécanique du moteur
+
+La constante de temps mécanique $\tau_m$ est identifiable expérimentalement en appliquant un **échelon de tension** au moteur et en relevant la réponse de vitesse (sonde tachymétrique) :
+
+$$\tau_m = \frac{J}{f + K_e^2 / R}$$
+
+où $J$ = moment d'inertie, $f$ = frottements visqueux, $K_e$ = constante de FEM, $R$ = résistance d'induit.
+
+> Non mesurée lors de la séance (encodeur non testé). La mesure consiste à appliquer un échelon via `SETCCR` et relever le temps pour atteindre 63 % de la vitesse finale.
+
+#### Fréquence d'asservissement
+
+La fréquence d'échantillonnage de la vitesse est fixée à **100 Hz** ($T_s = 10\,\text{ms}$), ce qui donne :
+- une résolution minimale de 1 top/période = $60000 / (4096 \times 10) \approx 1{,}5\,\text{RPM}$
+- une largeur de bande de boucle utilisable d'environ $f_{boucle} \leq f_s / 10 = \mathbf{10\,\text{Hz}}$
